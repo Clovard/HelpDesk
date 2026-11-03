@@ -444,86 +444,96 @@ function createCard(row) {
   return card;
 }
 
-function renderList() {
-  const data = visibleRows();
+function renderList(items = rows) {
+  const container =
+    document.getElementById("listView") ||
+    document.getElementById("board");
 
-  board.innerHTML = `
+  if (!container) return;
+
+  const isIdea = kind === "idea";
+
+  const headers = isIdea
+    ? [
+        ["ID", "ID"],
+        ["Дата", "Дата"],
+        ["Время", "Время"],
+        ["Сотрудник", "Сотрудник"],
+        ["Город", "Город"],
+        ["Подразделение", "Подразделение"],
+        ["Система", "Система"],
+        ["Идея / предложение", "Идея / Тип предложения"],
+        ["Ожидаемый результат", "Ожидаемый результат"],
+        ["Приоритет", "Приоритет"],
+        ["Статус", "Статус IT"],
+        ["Ответственный", "Ответственный"],
+        ["Комментарий", "Комментарий"]
+      ]
+    : [
+        ["ID", "ID"],
+        ["Дата", "Дата"],
+        ["Время", "Время"],
+        ["Сотрудник", "Сотрудник"],
+        ["Город", "Город"],
+        ["Подразделение", "Подразделение"],
+        ["Система", "Система"],
+        ["Тип", "Тип"],
+        ["Проблема", "Проблема / ситуация"],
+        ["Ожидаемый результат", "Ожидаемый результат"],
+        ["Статус", "Статус IT"],
+        ["Уровень", "Уровень L1/L2/L3"],
+        ["Ответственный", "Ответственный"],
+        ["Комментарий", "Комментарий IT"]
+      ];
+
+  container.innerHTML = `
     <div class="list-wrapper">
-      <table class="helpdesk-table">
+      <table class="full-list-table">
         <thead>
           <tr>
-            <th>ID</th>
-            <th>Дата</th>
-            <th>Сотрудник</th>
-            <th>Проблема / идея</th>
-            <th>Уровень</th>
-            <th>Ответственный</th>
-            <th>Статус</th>
-            <th>Комментарий</th>
-            <th></th>
+            ${headers.map(([title]) => `
+              <th>${escapeHtml(title)}</th>
+            `).join("")}
           </tr>
         </thead>
-
         <tbody>
-          ${data.map(row => `
-            <tr>
-              <td>
-                <b>${escapeHtml(getId(row))}</b>
-              </td>
+          ${items.map(row => `
+            <tr data-id="${escapeHtml(getValue(row, ["ID"]))}">
+              ${headers.map(([, key]) => {
+                let value = getValue(row, [key]);
 
-              <td>
-                ${escapeHtml(field(row,"Дата"))}
-              </td>
+                if (
+                  key === "Ответственный" &&
+                  !value
+                ) {
+                  value = getValue(row, ["Оветственный"]);
+                }
 
-              <td>
-                ${escapeHtml(
-                  field(row,"Сотрудник")
-                )}
-              </td>
+                if (
+                  key === "Статус IT" &&
+                  !value
+                ) {
+                  value = getValue(row, ["Статус"]);
+                }
 
-              <td class="table-problem">
-                ${escapeHtml(getTitle(row))}
-              </td>
+                if (
+                  key === "Комментарий IT" &&
+                  !value
+                ) {
+                  value = getValue(row, ["Комментарий"]);
+                }
 
-              <td>
-                ${escapeHtml(
-                  getLevel(row) || "Не указан"
-                )}
-              </td>
-
-              <td>
-                ${escapeHtml(
-                  getResponsible(row) ||
-                  "Не назначен"
-                )}
-              </td>
-
-              <td>
-                <span class="table-status">
-                  ${escapeHtml(getStatus(row))}
-                </span>
-              </td>
-
-              <td>
-                ${escapeHtml(
-                  getComment(row) || "нет"
-                )}
-              </td>
-
-              <td>
-                <button
-                  class="table-edit"
-                  data-id="${escapeHtml(getId(row))}"
-                >
-                  Изменить
-                </button>
-              </td>
+                return `
+                  <td>${escapeHtml(value || "—")}</td>
+                `;
+              }).join("")}
             </tr>
           `).join("")}
         </tbody>
       </table>
     </div>
   `;
+}
 
   document
     .querySelectorAll(".table-edit")
