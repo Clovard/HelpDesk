@@ -1,11 +1,10 @@
 const API_URL =
   "https://it-help-panel.andrejsarafonov.workers.dev";
 
-const responsibleOptions = [
-  "Андрей",
-  "Тема",
-  "Пентагон"
-];
+let kind = "ticket";
+let rows = [];
+let currentView = "kanban";
+let draggedId = null;
 
 const ticketStatuses = [
   "Новая",
@@ -23,716 +22,783 @@ const ideaStatuses = [
   "Отклонена"
 ];
 
-let kind = "ticket";
-let rows = [];
-let viewMode = "kanban";
-let password =
-  sessionStorage.getItem("helpdesk_password") || "";
+const RESPONSIBLES = [
+  "Андрей",
+  "Тема",
+  "Пентагон"
+];
 
-const board = document.getElementById("board");
-const search = document.getElementById("search");
-const refreshButton =
-  document.getElementById("refreshButton");
-const ticketsButton =
-  document.getElementById("ticketsButton");
-const ideasButton =
-  document.getElementById("ideasButton");
-const listButton =
-  document.getElementById("listButton");
-const kanbanButton =
-  document.getElementById("kanbanButton");
+let password = sessionStorage.getItem("helpdesk_password");
 
-function clean(value) {
-  return String(value || "")
-    .replace(/\uFEFF/g, "")
-    .replace(/\u00A0/g, " ")
-    .trim();
-}
+if (!password) {
+  password = prompt("Введите пароль панели");
 
-function authHeaders() {
-  if (!password) {
-    password = prompt("Введите пароль HelpDesk:");
-
-    if (!password) {
-      throw new Error("Пароль не введён");
-    }
-
+  if (password) {
     sessionStorage.setItem(
       "helpdesk_password",
       password
     );
   }
-
-  return {
-    "Content-Type": "application/json",
-    "Authorization":
-      "Basic " + btoa("admin:" + password)
-  };
 }
 
-function field(row, ...names) {
-  const keys = Object.keys(row || {});
-
-  for (const name of names) {
-    const wanted =
-      clean(name).toLowerCase();
-
-    const key = keys.find(item =>
-      clean(item).toLowerCase() === wanted
-    );
-
-    if (key && clean(row[key])) {
-      return clean(row[key]);
-    }
-  }
-
-  const key = keys.find(item => {
-    const value =
-      clean(item).toLowerCase();
-
-    return (
-      value.includes("ответствен") ||
-      value.includes("оветствен")
-    );
-  });
-
-  return key ? clean(row[key]) : "";
-}
-
-function getId(row) {
-  return field(row, "ID", "id");
-}
-
-function getResponsible(row) {
-  return field(
-    row,
-    "Ответственный",
-    "Оветственный",
-    "responsible"
-  );
-}
-
-function getLevel(row) {
-  return field(
-    row,
-    "Уровень L1/L2/L3",
-    "Уровень",
-    "level"
-  );
-}
-
-function getStatus(row) {
-  return field(
-    row,
-    "Статус IT",
-    "Статус идеи",
-    "Статус",
-    "status"
-  ) || "Новая";
-}
-
-function getTitle(row) {
-  return field(
-    row,
-    "Проблема / ситуация",
-    "Проблема",
-    "Идея / Тип предложения",
-    "Идея"
-  ) || "Без описания";
-}
-
-function getComment(row) {
-  return field(
-    row,
-    "Комментарий IT",
-    "Комментарий",
-    "comment"
-  );
+function authHeader() {
+  return "Basic " + btoa("admin:" + password);
 }
 
 function escapeHtml(value) {
-  return String(value || "")
-    .replaceAll("&","&amp;")
-    .replaceAll("<","&lt;")
-    .replaceAll(">","&gt;")
-    .replaceAll('"',"&quot;")
-    .replaceAll("'","&#039;");
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
 
-function updateCounters() {
-  const counts = {
-    "Новая": 0,
-    "На рассмотрении": 0,
-    "В работе": 0,
-    "Закрыта": 0
-  };
-
-  rows.forEach(row => {
-    const value = getStatus(row);
-
-    if (counts[value] !== undefined) {
-      counts[value]++;
+function getValue(row, names) {
+  for (const name of names) {
+    if (
+      row &&
+      row[name] !== undefined &&
+      row[name] !== null &&
+      row[name] !== ""
+    ) {
+      return row[name];
     }
-  });
+  }
 
-  document.getElementById("newCount")
-    .textContent = counts["Новая"];
-
-  document.getElementById("reviewCount")
-    .textContent =
-      counts["На рассмотрении"];
-
-  document.getElementById("workCount")
-    .textContent = counts["В работе"];
-
-  document.getElementById("closedCount")
-    .textContent = counts["Закрыта"];
-
-  document.getElementById("ticketMenuCount")
-    .textContent = rows.length;
+  return "";
 }
 
-async function loadRows() {
+function getId(row) {
+  return getValue(row, ["ID", "id"]);
+}
+
+function getStatus(row) {
+  return (
+    getValue(row, [
+      "Статус IT",
+      "Статус идеи",
+      "Статус",
+      "status"
+    ]) || "Новая"
+  );
+}
+
+function getResponsible(row) {
+  return getValue(row, [
+    "Ответственный",
+    "Оветственный",
+    "responsible"
+  ]);
+}
+
+function getLevel(row) {
+  return getValue(row, [
+    "Уровень L1/L2/L3",
+    "Уровень",
+    "level"
+  ]);
+}
+
+function getComment(row) {
+  return getValue(row, [
+    "Комментарий IT",
+    "Комментарий",
+    "comment"
+  ]);
+}
+
+function getProblem(row) {
+  return getValue(row, [
+    "Проблема / ситуация",
+    "Идея / Тип предложения",
+    "Идея / предложение",
+    "Проблема",
+    "problem"
+  ]);
+}
+
+async function load() {
   try {
     const response = await fetch(
-      `${API_URL}/api/list?kind=${kind}`,
+      API_URL + "/api/list?kind=" + kind,
       {
         method: "GET",
-        headers: authHeaders()
+        headers: {
+          Authorization: authHeader()
+        },
+        cache: "no-store"
       }
     );
 
-    const result =
-      await response.json();
+    if (response.status === 401) {
+      sessionStorage.removeItem(
+        "helpdesk_password"
+      );
 
-    if (!response.ok || result.ok === false) {
+      alert("Неверный пароль панели");
+      location.reload();
+      return;
+    }
+
+    if (!response.ok) {
       throw new Error(
-        result.error || "Ошибка загрузки"
+        "Ошибка HTTP: " + response.status
       );
     }
 
-    rows = result.rows || [];
+    const data = await response.json();
+
+    rows = Array.isArray(data)
+      ? data
+      : Array.isArray(data.rows)
+        ? data.rows
+        : [];
 
     updateCounters();
     render();
-
   } catch (error) {
-    board.innerHTML = `
-      <div class="empty">
-        ${escapeHtml(error.message)}
-      </div>
-    `;
+    console.error(error);
+    alert("Не удалось загрузить заявки");
   }
 }
 
-function visibleRows() {
-  const query =
-    clean(search?.value || "")
-      .toLowerCase();
+function getFilteredRows() {
+  const searchElement =
+    document.getElementById("search");
 
-  if (!query) {
+  const search = (
+    searchElement?.value || ""
+  ).toLowerCase().trim();
+
+  if (!search) {
     return rows;
   }
 
   return rows.filter(row =>
     JSON.stringify(row)
       .toLowerCase()
-      .includes(query)
+      .includes(search)
   );
 }
 
 function render() {
-  if (viewMode === "list") {
-    renderList();
+  const board =
+    document.getElementById("board");
+
+  if (!board) {
+    console.error(
+      "Не найден элемент #board"
+    );
+    return;
+  }
+
+  if (currentView === "list") {
+    renderList(board);
   } else {
-    renderKanban();
+    renderKanban(board);
   }
 }
 
-function renderKanban() {
-  board.innerHTML = "";
-
+function renderKanban(board) {
   const statuses =
     kind === "idea"
       ? ideaStatuses
       : ticketStatuses;
 
-  statuses.forEach(status => {
-    const column =
-      document.createElement("section");
+  const filteredRows =
+    getFilteredRows();
 
-    column.className = "column";
+  board.className = "board kanban-board";
 
-    column.innerHTML = `
-      <h2>${escapeHtml(status)}</h2>
-      <div class="cards"></div>
-    `;
-
-    const cards =
-      column.querySelector(".cards");
-
-    column.addEventListener(
-      "dragover",
-      event => {
-        event.preventDefault();
-        column.classList.add("drag-over");
-      }
-    );
-
-    column.addEventListener(
-      "dragleave",
-      () => {
-        column.classList.remove(
-          "drag-over"
-        );
-      }
-    );
-
-    column.addEventListener(
-      "drop",
-      async event => {
-        event.preventDefault();
-
-        const id =
-          event.dataTransfer.getData(
-            "text/plain"
-          );
-
-        const row = rows.find(
-          item => getId(item) === id
+  board.innerHTML = statuses
+    .map(status => {
+      const statusRows =
+        filteredRows.filter(
+          row => getStatus(row) === status
         );
 
-        if (!row) {
-          return;
-        }
+      return `
+        <section
+          class="column"
+          data-status="${escapeHtml(status)}"
+        >
+          <div class="column-header">
+            <h2>${escapeHtml(status)}</h2>
+            <span class="column-count">
+              ${statusRows.length}
+            </span>
+          </div>
 
-        const oldStatus =
-          getStatus(row);
+          <div class="cards">
+            ${
+              statusRows.length
+                ? statusRows
+                    .map(renderCard)
+                    .join("")
+                : `<div class="empty">
+                    Нет заявок
+                   </div>`
+            }
+          </div>
+        </section>
+      `;
+    })
+    .join("");
 
-        if (oldStatus === status) {
-          return;
-        }
-
-        if (kind === "idea") {
-          row["Статус идеи"] = status;
-        } else {
-          row["Статус IT"] = status;
-        }
-
-        render();
-        updateCounters();
-
-        try {
-          await saveRecord({
-            id,
-            kind,
-            status,
-            responsible:
-              getResponsible(row),
-            level: getLevel(row),
-            comment: getComment(row)
-          });
-        } catch (error) {
-          if (kind === "idea") {
-            row["Статус идеи"] =
-              oldStatus;
-          } else {
-            row["Статус IT"] =
-              oldStatus;
-          }
-
-          render();
-          updateCounters();
-          alert(error.message);
-        }
-      }
-    );
-
-    const statusRows =
-      visibleRows().filter(
-        row => getStatus(row) === status
-      );
-
-    if (!statusRows.length) {
-      cards.innerHTML =
-        `<div class="empty">Пусто</div>`;
-    } else {
-      statusRows.forEach(row => {
-        cards.appendChild(
-          createCard(row)
-        );
-      });
-    }
-
-    board.appendChild(column);
-  });
+  enableDragAndDrop();
+  enableCardButtons();
 }
 
-function createCard(row) {
-  const card =
-    document.createElement("article");
+function renderCard(row) {
+  const id = getId(row);
+  const problem = getProblem(row);
+  const responsible =
+    getResponsible(row) || "Не назначен";
+  const level =
+    getLevel(row) || "Не указан";
+  const comment =
+    getComment(row) || "нет";
 
-  card.className = "card";
-  card.draggable = true;
+  return `
+    <article
+      class="card"
+      draggable="true"
+      data-id="${escapeHtml(id)}"
+    >
+      <div class="card-top">
+        <strong class="card-id">
+          ${escapeHtml(id)}
+        </strong>
 
-  card.addEventListener(
-    "dragstart",
-    event => {
-      event.dataTransfer.setData(
-        "text/plain",
-        getId(row)
-      );
+        <button
+          class="edit-card"
+          data-edit-id="${escapeHtml(id)}"
+          type="button"
+        >
+          Редактировать
+        </button>
+      </div>
 
-      card.classList.add("dragging");
-    }
-  );
+      <div class="muted">
+        ${escapeHtml(
+          getValue(row, ["Дата"])
+        )}
+        ${escapeHtml(
+          getValue(row, ["Время"])
+        )}
+      </div>
 
-  card.addEventListener(
-    "dragend",
-    () => {
-      card.classList.remove(
-        "dragging"
-      );
-    }
-  );
+      <div class="muted">
+        ${escapeHtml(
+          getValue(row, ["Сотрудник"])
+        )}
+        ·
+        ${escapeHtml(
+          getValue(row, ["Город"])
+        )}
+      </div>
 
-  card.innerHTML = `
-    <div class="card-id">
-      ${escapeHtml(getId(row))}
-    </div>
+      <div class="muted">
+        ${escapeHtml(
+          getValue(row, ["Подразделение"])
+        )}
+        ·
+        ${escapeHtml(
+          getValue(row, ["Система"])
+        )}
+      </div>
 
-    <div class="muted">
-      ${escapeHtml(field(row,"Дата"))}
-      ·
-      ${escapeHtml(field(row,"Сотрудник"))}
-    </div>
+      <div class="problem">
+        ${escapeHtml(problem)}
+      </div>
 
-    <div class="problem">
-      ${escapeHtml(getTitle(row))}
-    </div>
+      <div class="card-info">
+        <div>
+          Уровень:
+          <b>${escapeHtml(level)}</b>
+        </div>
 
-    <div class="muted">
-      Уровень:
-      <b>${escapeHtml(
-        getLevel(row) || "Не указан"
-      )}</b>
-    </div>
+        <div>
+          Ответственный:
+          <b>${escapeHtml(responsible)}</b>
+        </div>
 
-    <div class="muted">
-      Ответственный:
-      <b>${escapeHtml(
-        getResponsible(row) ||
-        "Не назначен"
-      )}</b>
-    </div>
-
-    <div class="muted">
-      Комментарий:
-      ${escapeHtml(getComment(row) || "нет")}
-    </div>
-
-    <div class="actions">
-      <button type="button">
-        Редактировать
-      </button>
-    </div>
+        <div>
+          Комментарий:
+          ${escapeHtml(comment)}
+        </div>
+      </div>
+    </article>
   `;
-
-  card.querySelector("button")
-    .onclick = () => openEditor(row);
-
-  return card;
 }
 
-function renderList(items = rows) {
-  const container =
-    document.getElementById("listView") ||
-    document.getElementById("board");
+function renderList(board) {
+  const filteredRows =
+    getFilteredRows();
 
-  if (!container) return;
+  board.className = "board list-board";
 
-  const isIdea = kind === "idea";
+  const headers =
+    kind === "idea"
+      ? [
+          ["ID", ["ID"]],
+          ["Дата", ["Дата"]],
+          ["Время", ["Время"]],
+          ["Сотрудник", ["Сотрудник"]],
+          ["Город", ["Город"]],
+          ["Подразделение", ["Подразделение"]],
+          ["Система", ["Система"]],
+          [
+            "Идея",
+            [
+              "Идея / Тип предложения",
+              "Идея / предложение"
+            ]
+          ],
+          [
+            "Ожидаемый результат",
+            ["Ожидаемый результат"]
+          ],
+          ["Приоритет", ["Приоритет"]],
+          [
+            "Статус",
+            ["Статус IT", "Статус идеи"]
+          ],
+          [
+            "Ответственный",
+            [
+              "Ответственный",
+              "Оветственный"
+            ]
+          ],
+          [
+            "Комментарий",
+            [
+              "Комментарий IT",
+              "Комментарий"
+            ]
+          ]
+        ]
+      : [
+          ["ID", ["ID"]],
+          ["Дата", ["Дата"]],
+          ["Время", ["Время"]],
+          ["Сотрудник", ["Сотрудник"]],
+          ["Город", ["Город"]],
+          ["Подразделение", ["Подразделение"]],
+          ["Система", ["Система"]],
+          ["Тип", ["Тип"]],
+          [
+            "Проблема",
+            [
+              "Проблема / ситуация",
+              "Проблема"
+            ]
+          ],
+          [
+            "Ожидаемый результат",
+            ["Ожидаемый результат"]
+          ],
+          ["Статус", ["Статус IT", "Статус"]],
+          [
+            "Уровень",
+            ["Уровень L1/L2/L3", "Уровень"]
+          ],
+          [
+            "Ответственный",
+            [
+              "Ответственный",
+              "Оветственный"
+            ]
+          ],
+          [
+            "Комментарий",
+            [
+              "Комментарий IT",
+              "Комментарий"
+            ]
+          ]
+        ];
 
-  const headers = isIdea
-    ? [
-        ["ID", "ID"],
-        ["Дата", "Дата"],
-        ["Время", "Время"],
-        ["Сотрудник", "Сотрудник"],
-        ["Город", "Город"],
-        ["Подразделение", "Подразделение"],
-        ["Система", "Система"],
-        ["Идея / предложение", "Идея / Тип предложения"],
-        ["Ожидаемый результат", "Ожидаемый результат"],
-        ["Приоритет", "Приоритет"],
-        ["Статус", "Статус IT"],
-        ["Ответственный", "Ответственный"],
-        ["Комментарий", "Комментарий"]
-      ]
-    : [
-        ["ID", "ID"],
-        ["Дата", "Дата"],
-        ["Время", "Время"],
-        ["Сотрудник", "Сотрудник"],
-        ["Город", "Город"],
-        ["Подразделение", "Подразделение"],
-        ["Система", "Система"],
-        ["Тип", "Тип"],
-        ["Проблема", "Проблема / ситуация"],
-        ["Ожидаемый результат", "Ожидаемый результат"],
-        ["Статус", "Статус IT"],
-        ["Уровень", "Уровень L1/L2/L3"],
-        ["Ответственный", "Ответственный"],
-        ["Комментарий", "Комментарий IT"]
-      ];
-
-  container.innerHTML = `
+  board.innerHTML = `
     <div class="list-wrapper">
       <table class="full-list-table">
         <thead>
           <tr>
-            ${headers.map(([title]) => `
-              <th>${escapeHtml(title)}</th>
-            `).join("")}
+            ${headers
+              .map(([title]) =>
+                `<th>${escapeHtml(title)}</th>`
+              )
+              .join("")}
           </tr>
         </thead>
+
         <tbody>
-          ${items.map(row => `
-            <tr data-id="${escapeHtml(getValue(row, ["ID"]))}">
-              ${headers.map(([, key]) => {
-                let value = getValue(row, [key]);
-
-                if (
-                  key === "Ответственный" &&
-                  !value
-                ) {
-                  value = getValue(row, ["Оветственный"]);
-                }
-
-                if (
-                  key === "Статус IT" &&
-                  !value
-                ) {
-                  value = getValue(row, ["Статус"]);
-                }
-
-                if (
-                  key === "Комментарий IT" &&
-                  !value
-                ) {
-                  value = getValue(row, ["Комментарий"]);
-                }
-
-                return `
-                  <td>${escapeHtml(value || "—")}</td>
-                `;
-              }).join("")}
-            </tr>
-          `).join("")}
+          ${
+            filteredRows.length
+              ? filteredRows
+                  .map(row => `
+                    <tr
+                      data-id="${escapeHtml(
+                        getId(row)
+                      )}"
+                    >
+                      ${headers
+                        .map(([, names]) => `
+                          <td>
+                            ${escapeHtml(
+                              getValue(
+                                row,
+                                names
+                              ) || "—"
+                            )}
+                          </td>
+                        `)
+                        .join("")}
+                    </tr>
+                  `)
+                  .join("")
+              : `
+                <tr>
+                  <td
+                    colspan="${headers.length}"
+                    class="empty"
+                  >
+                    Заявок нет
+                  </td>
+                </tr>
+              `
+          }
         </tbody>
       </table>
     </div>
   `;
-}
 
-  document
-    .querySelectorAll(".table-edit")
-    .forEach(button => {
-      button.onclick = () => {
-        const row = rows.find(
-          item =>
-            getId(item) ===
-            button.dataset.id
-        );
-
-        if (row) {
-          openEditor(row);
+  board
+    .querySelectorAll("tbody tr[data-id]")
+    .forEach(row => {
+      row.addEventListener(
+        "dblclick",
+        () => {
+          openEditor(row.dataset.id);
         }
-      };
+      );
     });
 }
 
-async function saveRecord(data) {
-  const response = await fetch(
-    `${API_URL}/api/update`,
-    {
-      method: "POST",
-      headers: authHeaders(),
-      body: JSON.stringify(data)
+function enableDragAndDrop() {
+  document
+    .querySelectorAll(".card")
+    .forEach(card => {
+      card.addEventListener(
+        "dragstart",
+        () => {
+          draggedId = card.dataset.id;
+          card.classList.add("dragging");
+        }
+      );
+
+      card.addEventListener(
+        "dragend",
+        () => {
+          draggedId = null;
+          card.classList.remove(
+            "dragging"
+          );
+        }
+      );
+    });
+
+  document
+    .querySelectorAll(".column")
+    .forEach(column => {
+      column.addEventListener(
+        "dragover",
+        event => {
+          event.preventDefault();
+          column.classList.add("drag-over");
+        }
+      );
+
+      column.addEventListener(
+        "dragleave",
+        () => {
+          column.classList.remove(
+            "drag-over"
+          );
+        }
+      );
+
+      column.addEventListener(
+        "drop",
+        async event => {
+          event.preventDefault();
+
+          column.classList.remove(
+            "drag-over"
+          );
+
+          if (!draggedId) {
+            return;
+          }
+
+          const status =
+            column.dataset.status;
+
+          await updateTicket(
+            draggedId,
+            {
+              status
+            }
+          );
+        }
+      );
+    });
+}
+
+function enableCardButtons() {
+  document
+    .querySelectorAll("[data-edit-id]")
+    .forEach(button => {
+      button.addEventListener(
+        "click",
+        event => {
+          event.stopPropagation();
+          openEditor(
+            button.dataset.editId
+          );
+        }
+      );
+    });
+}
+
+async function updateTicket(id, data) {
+  try {
+    const response = await fetch(
+      API_URL + "/api/update",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type":
+            "application/json",
+          Authorization: authHeader()
+        },
+        body: JSON.stringify({
+          kind,
+          id,
+          ...data
+        })
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        "Ошибка сохранения"
+      );
+    }
+
+    const result =
+      await response.json();
+
+    if (result.ok === false) {
+      throw new Error(
+        result.error || "Ошибка API"
+      );
+    }
+
+    await load();
+  } catch (error) {
+    console.error(error);
+    alert("Изменение не сохранено");
+  }
+}
+
+async function openEditor(id) {
+  const row = rows.find(
+    item => String(getId(item)) === String(id)
+  );
+
+  if (!row) {
+    return;
+  }
+
+  const oldResponsible =
+    getResponsible(row);
+
+  const oldLevel =
+    getLevel(row);
+
+  const oldComment =
+    getComment(row);
+
+  const responsible =
+    prompt(
+      "Ответственный:\nАндрей, Тема, Пентагон",
+      oldResponsible
+    );
+
+  if (responsible === null) {
+    return;
+  }
+
+  const level =
+    prompt(
+      "Уровень: L1, L2 или L3",
+      oldLevel
+    );
+
+  if (level === null) {
+    return;
+  }
+
+  const comment =
+    prompt(
+      "Комментарий IT",
+      oldComment
+    );
+
+  if (comment === null) {
+    return;
+  }
+
+  await updateTicket(id, {
+    responsible: responsible.trim(),
+    level: level.trim(),
+    comment: comment.trim()
+  });
+}
+
+function updateCounters() {
+  const statuses =
+    kind === "idea"
+      ? ideaStatuses
+      : ticketStatuses;
+
+  for (const status of statuses) {
+    const count =
+      rows.filter(
+        row => getStatus(row) === status
+      ).length;
+
+    const selectors = [
+      `[data-status-count="${status}"]`,
+      `[data-count-status="${status}"]`
+    ];
+
+    for (const selector of selectors) {
+      document
+        .querySelectorAll(selector)
+        .forEach(element => {
+          element.textContent = count;
+        });
+    }
+  }
+
+  const counter =
+    document.getElementById("counter");
+
+  if (counter) {
+    counter.textContent =
+      `${rows.length} записей`;
+  }
+}
+
+function findButton(id, text) {
+  const byId =
+    document.getElementById(id);
+
+  if (byId) {
+    return byId;
+  }
+
+  return [...document.querySelectorAll(
+    "button"
+  )].find(button =>
+    button.textContent
+      .trim()
+      .toLowerCase()
+      .includes(text.toLowerCase())
+  );
+}
+
+function setupButtons() {
+  const ticketsButton =
+    findButton(
+      "ticketsButton",
+      "Заявки"
+    );
+
+  const ideasButton =
+    findButton(
+      "ideasButton",
+      "Идеи"
+    );
+
+  const refreshButton =
+    findButton(
+      "refreshButton",
+      "Обновить"
+    );
+
+  const kanbanButton =
+    findButton(
+      "kanbanButton",
+      "Канбан"
+    );
+
+  const listButton =
+    findButton(
+      "listButton",
+      "Список"
+    );
+
+  ticketsButton?.addEventListener(
+    "click",
+    () => {
+      kind = "ticket";
+      currentView = "kanban";
+      load();
     }
   );
 
-  const result =
-    await response.json();
-
-  if (!response.ok || result.ok === false) {
-    throw new Error(
-      result.error || "Ошибка сохранения"
-    );
-  }
-
-  return result;
-}
-
-function openEditor(row) {
-  const modal =
-    document.createElement("div");
-
-  modal.className = "modal";
-
-  const selected =
-    getResponsible(row);
-
-  modal.innerHTML = `
-    <div class="modal-window">
-      <div class="modal-header">
-        <h2>
-          Редактирование ${escapeHtml(getId(row))}
-        </h2>
-
-        <button id="closeEditor">
-          ×
-        </button>
-      </div>
-
-      <label>
-        Ответственный
-
-        <select id="editResponsible">
-          <option value="">Не назначен</option>
-
-          ${[
-            ...new Set([
-              ...responsibleOptions,
-              selected
-            ])
-          ]
-            .filter(Boolean)
-            .map(name => `
-              <option
-                value="${escapeHtml(name)}"
-                ${
-                  name === selected
-                    ? "selected"
-                    : ""
-                }
-              >
-                ${escapeHtml(name)}
-              </option>
-            `)
-            .join("")}
-        </select>
-      </label>
-
-      <label>
-        Уровень
-
-        <select id="editLevel">
-          <option value="">Не указан</option>
-          <option value="L1">L1</option>
-          <option value="L2">L2</option>
-          <option value="L3">L3</option>
-        </select>
-      </label>
-
-      <label>
-        Комментарий
-
-        <textarea id="editComment">${escapeHtml(
-          getComment(row)
-        )}</textarea>
-      </label>
-
-      <div class="modal-actions">
-        <button id="cancelEditor">
-          Отмена
-        </button>
-
-        <button
-          id="saveEditor"
-          class="primary"
-        >
-          Сохранить
-        </button>
-      </div>
-    </div>
-  `;
-
-  document.body.appendChild(modal);
-
-  document.getElementById(
-    "closeEditor"
-  ).onclick = () => modal.remove();
-
-  document.getElementById(
-    "cancelEditor"
-  ).onclick = () => modal.remove();
-
-  document.getElementById(
-    "saveEditor"
-  ).onclick = async () => {
-    try {
-      await saveRecord({
-        id: getId(row),
-        kind,
-        status: getStatus(row),
-
-        responsible:
-          document.getElementById(
-            "editResponsible"
-          ).value,
-
-        level:
-          document.getElementById(
-            "editLevel"
-          ).value,
-
-        comment:
-          document.getElementById(
-            "editComment"
-          ).value
-      });
-
-      modal.remove();
-      await loadRows();
-
-    } catch (error) {
-      alert(error.message);
+  ideasButton?.addEventListener(
+    "click",
+    () => {
+      kind = "idea";
+      currentView = "kanban";
+      load();
     }
-  };
+  );
+
+  refreshButton?.addEventListener(
+    "click",
+    load
+  );
+
+  kanbanButton?.addEventListener(
+    "click",
+    () => {
+      currentView = "kanban";
+      render();
+    }
+  );
+
+  listButton?.addEventListener(
+    "click",
+    () => {
+      currentView = "list";
+      render();
+    }
+  );
+
+  document
+    .getElementById("search")
+    ?.addEventListener(
+      "input",
+      render
+    );
 }
 
-ticketsButton.onclick = () => {
-  kind = "ticket";
-  ticketsButton.classList.add("active");
-  ideasButton.classList.remove("active");
-  loadRows();
-};
-
-ideasButton.onclick = () => {
-  kind = "idea";
-  ideasButton.classList.add("active");
-  ticketsButton.classList.remove("active");
-  loadRows();
-};
-
-kanbanButton.onclick = () => {
-  viewMode = "kanban";
-  kanbanButton.classList.add("active");
-  listButton.classList.remove("active");
-  render();
-};
-
-listButton.onclick = () => {
-  viewMode = "list";
-  listButton.classList.add("active");
-  kanbanButton.classList.remove("active");
-  render();
-};
-
-refreshButton.onclick = loadRows;
-search.oninput = render;
-
-loadRows();
-
-setInterval(loadRows, 20000);
+setupButtons();
+load();
