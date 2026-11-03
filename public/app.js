@@ -1,10 +1,11 @@
 const API_URL =
-  "https://it-help-panel.andrejsarafonov.workers.dev";
+"https://it-help-panel.andrejsarafonov.workers.dev";
 
-let kind = "ticket";
-let rows = [];
-let currentView = "kanban";
-let draggedId = null;
+const responsibleOptions = [
+  "Андрей",
+  "Тема",
+  "Пентагон"
+];
 
 const ticketStatuses = [
   "Новая",
@@ -22,783 +23,725 @@ const ideaStatuses = [
   "Отклонена"
 ];
 
-const RESPONSIBLES = [
-  "Андрей",
-  "Тема",
-  "Пентагон"
-];
+let kind = "ticket";
+let rows = [];
+let viewMode = "kanban";
+let password =
+sessionStorage.getItem("helpdesk_password") || "";
 
-let password = sessionStorage.getItem("helpdesk_password");
+const board = document.getElementById("board");
+const search = document.getElementById("search");
+const refreshButton =
+document.getElementById("refreshButton");
+const ticketsButton =
+document.getElementById("ticketsButton");
+const ideasButton =
+document.getElementById("ideasButton");
+const listButton =
+document.getElementById("listButton");
+const kanbanButton =
+document.querySelector(".view.active");
 
-if (!password) {
-  password = prompt("Введите пароль панели");
+function clean(value) {
+  return String(value || "")
+  .replace(/\uFEFF/g, "")
+  .replace(/\u00A0/g, " ")
+  .trim();
+}
 
-  if (password) {
+function getHeaders() {
+  if (!password) {
+    password = prompt("Введите пароль HelpDesk:");
+
+    if (!password) {
+      throw new Error("Пароль не введён");
+    }
+
     sessionStorage.setItem(
-      "helpdesk_password",
-      password
+        "helpdesk_password",
+        password
     );
   }
+
+  return {
+    "Content-Type": "application/json",
+    "Authorization":
+    "Basic " + btoa("admin:" + password)
+  };
 }
 
-function authHeader() {
-  return "Basic " + btoa("admin:" + password);
-}
+function field(row, ...names) {
+  const keys = Object.keys(row || {});
 
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-
-function getValue(row, names) {
   for (const name of names) {
-    if (
-      row &&
-      row[name] !== undefined &&
-      row[name] !== null &&
-      row[name] !== ""
-    ) {
-      return row[name];
+    const wanted =
+    clean(name).toLowerCase();
+
+    const key = keys.find(item =>
+    clean(item).toLowerCase() === wanted
+    );
+
+    if (key && clean(row[key])) {
+      return clean(row[key]);
     }
   }
 
-  return "";
+  const responsibleKey = keys.find(key => {
+    const value =
+    clean(key).toLowerCase();
+
+    return (
+      value.includes("ответствен") ||
+      value.includes("оветствен")
+    );
+  });
+
+  return responsibleKey
+  ? clean(row[responsibleKey])
+  : "";
 }
 
 function getId(row) {
-  return getValue(row, ["ID", "id"]);
+  return field(row, "ID", "id");
+}
+
+function getResponsible(row) {
+  return field(
+      row,
+      "Ответственный",
+      "Оветственный",
+      "responsible"
+  );
+}
+
+function getLevel(row) {
+  return field(
+      row,
+      "Уровень L1/L2/L3",
+      "Уровень",
+      "level"
+  );
 }
 
 function getStatus(row) {
-  return (
-    getValue(row, [
+  return field(
+      row,
       "Статус IT",
       "Статус идеи",
       "Статус",
       "status"
-    ]) || "Новая"
-  );
+  ) || "Новая";
 }
 
-function getResponsible(row) {
-  return getValue(row, [
-    "Ответственный",
-    "Оветственный",
-    "responsible"
-  ]);
-}
-
-function getLevel(row) {
-  return getValue(row, [
-    "Уровень L1/L2/L3",
-    "Уровень",
-    "level"
-  ]);
+function getTitle(row) {
+  return field(
+      row,
+      "Проблема / ситуация",
+      "Проблема",
+      "Идея / Тип предложения",
+      "Идея"
+  ) || "Без описания";
 }
 
 function getComment(row) {
-  return getValue(row, [
-    "Комментарий IT",
-    "Комментарий",
-    "comment"
-  ]);
+  return field(
+      row,
+      "Комментарий IT",
+      "Комментарий",
+      "comment"
+  );
 }
 
-function getProblem(row) {
-  return getValue(row, [
-    "Проблема / ситуация",
-    "Идея / Тип предложения",
-    "Идея / предложение",
-    "Проблема",
-    "problem"
-  ]);
+function esc(value) {
+  return String(value || "")
+  .replaceAll("&", "&amp;")
+  .replaceAll("<", "&lt;")
+  .replaceAll(">", "&gt;")
+  .replaceAll('"', "&quot;")
+  .replaceAll("'", "&#039;");
 }
 
-async function load() {
+function updateCounters() {
+  const counts = {
+    "Новая": 0,
+    "На рассмотрении": 0,
+    "В работе": 0,
+    "Закрыта": 0
+  };
+
+  rows.forEach(row => {
+    const current = getStatus(row);
+
+    if (counts[current] !== undefined) {
+      counts[current]++;
+    }
+  });
+
+  document.getElementById("newCount")
+  ?.replaceChildren(
+      document.createTextNode(counts["Новая"])
+  );
+
+  document.getElementById("reviewCount")
+  ?.replaceChildren(
+      document.createTextNode(
+          counts["На рассмотрении"]
+      )
+  );
+
+  document.getElementById("workCount")
+  ?.replaceChildren(
+      document.createTextNode(
+          counts["В работе"]
+      )
+  );
+
+  document.getElementById("closedCount")
+  ?.replaceChildren(
+      document.createTextNode(
+          counts["Закрыта"]
+      )
+  );
+
+  const sideCounters =
+  document.querySelectorAll(".menu em");
+
+  if (sideCounters[0]) {
+    sideCounters[0].textContent =
+    rows.length;
+  }
+}
+
+async function loadRows() {
   try {
     const response = await fetch(
-      API_URL + "/api/list?kind=" + kind,
-      {
-        method: "GET",
-        headers: {
-          Authorization: authHeader()
-        },
-        cache: "no-store"
-      }
+        `${API_URL}/api/list?kind=${kind}`,
+          {
+          method: "GET",
+          headers: getHeaders()
+        }
     );
 
     if (response.status === 401) {
       sessionStorage.removeItem(
-        "helpdesk_password"
+          "helpdesk_password"
       );
 
-      alert("Неверный пароль панели");
-      location.reload();
-      return;
+      password = "";
+
+      throw new Error("Неверный пароль");
     }
 
-    if (!response.ok) {
+    const result =
+    await response.json();
+
+    if (
+      !response.ok ||
+      result.ok === false
+    ) {
       throw new Error(
-        "Ошибка HTTP: " + response.status
+          result.error || "Ошибка загрузки"
       );
     }
 
-    const data = await response.json();
-
-    rows = Array.isArray(data)
-      ? data
-      : Array.isArray(data.rows)
-        ? data.rows
-        : [];
-
+    rows = result.rows || [];
     updateCounters();
     render();
+
   } catch (error) {
-    console.error(error);
-    alert("Не удалось загрузить заявки");
+    board.innerHTML = `
+      <div class="empty">
+        ${esc(error.message)}
+      </div>
+    `;
   }
 }
 
-function getFilteredRows() {
-  const searchElement =
-    document.getElementById("search");
+function getVisibleRows() {
+  const query =
+  clean(search?.value || "")
+  .toLowerCase();
 
-  const search = (
-    searchElement?.value || ""
-  ).toLowerCase().trim();
-
-  if (!search) {
+  if (!query) {
     return rows;
   }
 
   return rows.filter(row =>
-    JSON.stringify(row)
-      .toLowerCase()
-      .includes(search)
+  JSON.stringify(row)
+  .toLowerCase()
+  .includes(query)
   );
 }
 
 function render() {
-  const board =
-    document.getElementById("board");
-
-  if (!board) {
-    console.error(
-      "Не найден элемент #board"
-    );
-    return;
-  }
-
-  if (currentView === "list") {
-    renderList(board);
+  if (viewMode === "list") {
+    renderList();
   } else {
-    renderKanban(board);
+    renderKanban();
   }
 }
 
-function renderKanban(board) {
+function renderKanban() {
+  board.innerHTML = "";
+
   const statuses =
-    kind === "idea"
-      ? ideaStatuses
-      : ticketStatuses;
+  kind === "idea"
+  ? ideaStatuses
+  : ticketStatuses;
 
-  const filteredRows =
-    getFilteredRows();
+  const visibleRows =
+  getVisibleRows();
 
-  board.className = "board kanban-board";
+  statuses.forEach(status => {
+    const column =
+    document.createElement("section");
 
-  board.innerHTML = statuses
-    .map(status => {
-      const statusRows =
-        filteredRows.filter(
-          row => getStatus(row) === status
-        );
+    column.className = "column";
+    column.dataset.status = status;
 
-      return `
-        <section
-          class="column"
-          data-status="${escapeHtml(status)}"
-        >
-          <div class="column-header">
-            <h2>${escapeHtml(status)}</h2>
-            <span class="column-count">
-              ${statusRows.length}
-            </span>
-          </div>
+    column.innerHTML = `
+      <h2>${esc(status)}</h2>
+      <div class="cards"></div>
+    `;
 
-          <div class="cards">
-            ${
-              statusRows.length
-                ? statusRows
-                    .map(renderCard)
-                    .join("")
-                : `<div class="empty">
-                    Нет заявок
-                   </div>`
-            }
-          </div>
-        </section>
-      `;
-    })
-    .join("");
+    const cards =
+    column.querySelector(".cards");
 
-  enableDragAndDrop();
-  enableCardButtons();
-}
-
-function renderCard(row) {
-  const id = getId(row);
-  const problem = getProblem(row);
-  const responsible =
-    getResponsible(row) || "Не назначен";
-  const level =
-    getLevel(row) || "Не указан";
-  const comment =
-    getComment(row) || "нет";
-
-  return `
-    <article
-      class="card"
-      draggable="true"
-      data-id="${escapeHtml(id)}"
-    >
-      <div class="card-top">
-        <strong class="card-id">
-          ${escapeHtml(id)}
-        </strong>
-
-        <button
-          class="edit-card"
-          data-edit-id="${escapeHtml(id)}"
-          type="button"
-        >
-          Редактировать
-        </button>
-      </div>
-
-      <div class="muted">
-        ${escapeHtml(
-          getValue(row, ["Дата"])
-        )}
-        ${escapeHtml(
-          getValue(row, ["Время"])
-        )}
-      </div>
-
-      <div class="muted">
-        ${escapeHtml(
-          getValue(row, ["Сотрудник"])
-        )}
-        ·
-        ${escapeHtml(
-          getValue(row, ["Город"])
-        )}
-      </div>
-
-      <div class="muted">
-        ${escapeHtml(
-          getValue(row, ["Подразделение"])
-        )}
-        ·
-        ${escapeHtml(
-          getValue(row, ["Система"])
-        )}
-      </div>
-
-      <div class="problem">
-        ${escapeHtml(problem)}
-      </div>
-
-      <div class="card-info">
-        <div>
-          Уровень:
-          <b>${escapeHtml(level)}</b>
-        </div>
-
-        <div>
-          Ответственный:
-          <b>${escapeHtml(responsible)}</b>
-        </div>
-
-        <div>
-          Комментарий:
-          ${escapeHtml(comment)}
-        </div>
-      </div>
-    </article>
-  `;
-}
-
-function renderList(board) {
-  const filteredRows =
-    getFilteredRows();
-
-  board.className = "board list-board";
-
-  const headers =
-    kind === "idea"
-      ? [
-          ["ID", ["ID"]],
-          ["Дата", ["Дата"]],
-          ["Время", ["Время"]],
-          ["Сотрудник", ["Сотрудник"]],
-          ["Город", ["Город"]],
-          ["Подразделение", ["Подразделение"]],
-          ["Система", ["Система"]],
-          [
-            "Идея",
-            [
-              "Идея / Тип предложения",
-              "Идея / предложение"
-            ]
-          ],
-          [
-            "Ожидаемый результат",
-            ["Ожидаемый результат"]
-          ],
-          ["Приоритет", ["Приоритет"]],
-          [
-            "Статус",
-            ["Статус IT", "Статус идеи"]
-          ],
-          [
-            "Ответственный",
-            [
-              "Ответственный",
-              "Оветственный"
-            ]
-          ],
-          [
-            "Комментарий",
-            [
-              "Комментарий IT",
-              "Комментарий"
-            ]
-          ]
-        ]
-      : [
-          ["ID", ["ID"]],
-          ["Дата", ["Дата"]],
-          ["Время", ["Время"]],
-          ["Сотрудник", ["Сотрудник"]],
-          ["Город", ["Город"]],
-          ["Подразделение", ["Подразделение"]],
-          ["Система", ["Система"]],
-          ["Тип", ["Тип"]],
-          [
-            "Проблема",
-            [
-              "Проблема / ситуация",
-              "Проблема"
-            ]
-          ],
-          [
-            "Ожидаемый результат",
-            ["Ожидаемый результат"]
-          ],
-          ["Статус", ["Статус IT", "Статус"]],
-          [
-            "Уровень",
-            ["Уровень L1/L2/L3", "Уровень"]
-          ],
-          [
-            "Ответственный",
-            [
-              "Ответственный",
-              "Оветственный"
-            ]
-          ],
-          [
-            "Комментарий",
-            [
-              "Комментарий IT",
-              "Комментарий"
-            ]
-          ]
-        ];
-
-  board.innerHTML = `
-    <div class="list-wrapper">
-      <table class="full-list-table">
-        <thead>
-          <tr>
-            ${headers
-              .map(([title]) =>
-                `<th>${escapeHtml(title)}</th>`
-              )
-              .join("")}
-          </tr>
-        </thead>
-
-        <tbody>
-          ${
-            filteredRows.length
-              ? filteredRows
-                  .map(row => `
-                    <tr
-                      data-id="${escapeHtml(
-                        getId(row)
-                      )}"
-                    >
-                      ${headers
-                        .map(([, names]) => `
-                          <td>
-                            ${escapeHtml(
-                              getValue(
-                                row,
-                                names
-                              ) || "—"
-                            )}
-                          </td>
-                        `)
-                        .join("")}
-                    </tr>
-                  `)
-                  .join("")
-              : `
-                <tr>
-                  <td
-                    colspan="${headers.length}"
-                    class="empty"
-                  >
-                    Заявок нет
-                  </td>
-                </tr>
-              `
-          }
-        </tbody>
-      </table>
-    </div>
-  `;
-
-  board
-    .querySelectorAll("tbody tr[data-id]")
-    .forEach(row => {
-      row.addEventListener(
-        "dblclick",
-        () => {
-          openEditor(row.dataset.id);
-        }
-      );
-    });
-}
-
-function enableDragAndDrop() {
-  document
-    .querySelectorAll(".card")
-    .forEach(card => {
-      card.addEventListener(
-        "dragstart",
-        () => {
-          draggedId = card.dataset.id;
-          card.classList.add("dragging");
-        }
-      );
-
-      card.addEventListener(
-        "dragend",
-        () => {
-          draggedId = null;
-          card.classList.remove(
-            "dragging"
-          );
-        }
-      );
-    });
-
-  document
-    .querySelectorAll(".column")
-    .forEach(column => {
-      column.addEventListener(
+    column.addEventListener(
         "dragover",
         event => {
           event.preventDefault();
           column.classList.add("drag-over");
         }
-      );
+    );
 
-      column.addEventListener(
+    column.addEventListener(
         "dragleave",
         () => {
           column.classList.remove(
-            "drag-over"
+              "drag-over"
           );
         }
-      );
+    );
 
-      column.addEventListener(
+    column.addEventListener(
         "drop",
         async event => {
           event.preventDefault();
 
-          column.classList.remove(
-            "drag-over"
+          const id =
+          event.dataTransfer.getData(
+              "text/plain"
           );
 
-          if (!draggedId) {
+          const row = rows.find(
+              item => getId(item) === id
+          );
+
+          if (!row) {
             return;
           }
 
-          const status =
-            column.dataset.status;
+          const oldStatus =
+          getStatus(row);
 
-          await updateTicket(
-            draggedId,
-            {
-              status
+          if (oldStatus === status) {
+            return;
+          }
+
+          if (kind === "idea") {
+            row["Статус идеи"] = status;
+          } else {
+            row["Статус IT"] = status;
+          }
+
+          render();
+          updateCounters();
+
+          try {
+            await saveRecord({
+              id,
+              kind,
+              status,
+              responsible:
+              getResponsible(row),
+              level: getLevel(row),
+              comment: getComment(row)
+            });
+          } catch (error) {
+            if (kind === "idea") {
+              row["Статус идеи"] =
+              oldStatus;
+            } else {
+              row["Статус IT"] =
+              oldStatus;
             }
-          );
-        }
-      );
-    });
-}
 
-function enableCardButtons() {
-  document
-    .querySelectorAll("[data-edit-id]")
-    .forEach(button => {
-      button.addEventListener(
-        "click",
-        event => {
-          event.stopPropagation();
-          openEditor(
-            button.dataset.editId
-          );
+            render();
+            updateCounters();
+            alert(error.message);
+          }
         }
-      );
-    });
-}
-
-async function updateTicket(id, data) {
-  try {
-    const response = await fetch(
-      API_URL + "/api/update",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type":
-            "application/json",
-          Authorization: authHeader()
-        },
-        body: JSON.stringify({
-          kind,
-          id,
-          ...data
-        })
-      }
     );
 
-    if (!response.ok) {
-      throw new Error(
-        "Ошибка сохранения"
-      );
+    const statusRows =
+    visibleRows.filter(
+        row => getStatus(row) === status
+    );
+
+    if (!statusRows.length) {
+      cards.innerHTML =
+      `<div class="empty">Пусто</div>`;
+    } else {
+      statusRows.forEach(row => {
+        cards.appendChild(
+            createCard(row)
+        );
+      });
     }
 
-    const result =
-      await response.json();
-
-    if (result.ok === false) {
-      throw new Error(
-        result.error || "Ошибка API"
-      );
-    }
-
-    await load();
-  } catch (error) {
-    console.error(error);
-    alert("Изменение не сохранено");
-  }
-}
-
-async function openEditor(id) {
-  const row = rows.find(
-    item => String(getId(item)) === String(id)
-  );
-
-  if (!row) {
-    return;
-  }
-
-  const oldResponsible =
-    getResponsible(row);
-
-  const oldLevel =
-    getLevel(row);
-
-  const oldComment =
-    getComment(row);
-
-  const responsible =
-    prompt(
-      "Ответственный:\nАндрей, Тема, Пентагон",
-      oldResponsible
-    );
-
-  if (responsible === null) {
-    return;
-  }
-
-  const level =
-    prompt(
-      "Уровень: L1, L2 или L3",
-      oldLevel
-    );
-
-  if (level === null) {
-    return;
-  }
-
-  const comment =
-    prompt(
-      "Комментарий IT",
-      oldComment
-    );
-
-  if (comment === null) {
-    return;
-  }
-
-  await updateTicket(id, {
-    responsible: responsible.trim(),
-    level: level.trim(),
-    comment: comment.trim()
+    board.appendChild(column);
   });
 }
 
-function updateCounters() {
-  const statuses =
-    kind === "idea"
-      ? ideaStatuses
-      : ticketStatuses;
+function createCard(row) {
+  const card =
+  document.createElement("article");
 
-  for (const status of statuses) {
-    const count =
-      rows.filter(
-        row => getStatus(row) === status
-      ).length;
+  card.className = "card";
+  card.draggable = true;
 
-    const selectors = [
-      `[data-status-count="${status}"]`,
-      `[data-count-status="${status}"]`
-    ];
+  card.addEventListener(
+      "dragstart",
+      event => {
+        event.dataTransfer.setData(
+            "text/plain",
+            getId(row)
+        );
 
-    for (const selector of selectors) {
-      document
-        .querySelectorAll(selector)
-        .forEach(element => {
-          element.textContent = count;
-        });
-    }
-  }
+        card.classList.add("dragging");
+      }
+  );
 
-  const counter =
-    document.getElementById("counter");
+  card.addEventListener(
+      "dragend",
+      () => {
+        card.classList.remove(
+            "dragging"
+        );
+      }
+  );
 
-  if (counter) {
-    counter.textContent =
-      `${rows.length} записей`;
-  }
+  card.innerHTML = `
+    <div class="card-id">
+      ${esc(getId(row))}
+    </div>
+
+    <div class="muted">
+      ${esc(field(row, "Дата"))}
+      ·
+      ${esc(field(row, "Сотрудник"))}
+    </div>
+
+    <div class="problem">
+      ${esc(getTitle(row))}
+    </div>
+
+    <div class="muted">
+      Уровень:
+      <b>${esc(
+      getLevel(row) || "Не указан"
+  )}</b>
+    </div>
+
+    <div class="muted">
+      Ответственный:
+      <b>${esc(
+      getResponsible(row) ||
+      "Не назначен"
+  )}</b>
+    </div>
+
+    <div class="muted">
+      Комментарий:
+      ${esc(getComment(row) || "нет")}
+    </div>
+
+    <div class="actions">
+      <button type="button">
+        Редактировать
+      </button>
+    </div>
+  `;
+
+  card.querySelector("button")
+  .addEventListener(
+      "click",
+      () => openEditor(row)
+  );
+
+  return card;
 }
 
-function findButton(id, text) {
-  const byId =
-    document.getElementById(id);
+function renderList() {
+  const visibleRows =
+  getVisibleRows();
 
-  if (byId) {
-    return byId;
-  }
+  board.innerHTML = `
+    <div class="list-wrapper">
+      <table class="helpdesk-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Дата</th>
+            <th>Сотрудник</th>
+            <th>Проблема / идея</th>
+            <th>Уровень</th>
+            <th>Ответственный</th>
+            <th>Статус</th>
+            <th>Комментарий</th>
+            <th></th>
+          </tr>
+        </thead>
 
-  return [...document.querySelectorAll(
-    "button"
-  )].find(button =>
-    button.textContent
-      .trim()
-      .toLowerCase()
-      .includes(text.toLowerCase())
-  );
-}
-
-function setupButtons() {
-  const ticketsButton =
-    findButton(
-      "ticketsButton",
-      "Заявки"
-    );
-
-  const ideasButton =
-    findButton(
-      "ideasButton",
-      "Идеи"
-    );
-
-  const refreshButton =
-    findButton(
-      "refreshButton",
-      "Обновить"
-    );
-
-  const kanbanButton =
-    findButton(
-      "kanbanButton",
-      "Канбан"
-    );
-
-  const listButton =
-    findButton(
-      "listButton",
-      "Список"
-    );
-
-  ticketsButton?.addEventListener(
-    "click",
-    () => {
-      kind = "ticket";
-      currentView = "kanban";
-      load();
-    }
-  );
-
-  ideasButton?.addEventListener(
-    "click",
-    () => {
-      kind = "idea";
-      currentView = "kanban";
-      load();
-    }
-  );
-
-  refreshButton?.addEventListener(
-    "click",
-    load
-  );
-
-  kanbanButton?.addEventListener(
-    "click",
-    () => {
-      currentView = "kanban";
-      render();
-    }
-  );
-
-  listButton?.addEventListener(
-    "click",
-    () => {
-      currentView = "list";
-      render();
-    }
-  );
+        <tbody>
+          ${visibleRows.map(row => `
+            <tr>
+              <td><b>${esc(getId(row))}</b></td>
+              <td>${esc(field(row, "Дата"))}</td>
+              <td>${esc(field(row, "Сотрудник"))}</td>
+              <td class="table-problem">
+                ${esc(getTitle(row))}
+              </td>
+              <td>${esc(getLevel(row) || "Не указан")}</td>
+              <td>
+                ${esc(
+      getResponsible(row) ||
+      "Не назначен"
+  )}
+              </td>
+              <td>
+                <span class="table-status">
+                  ${esc(getStatus(row))}
+                </span>
+              </td>
+              <td>${esc(getComment(row) || "нет")}</td>
+              <td>
+                <button
+                  class="table-edit"
+                  data-id="${esc(getId(row))}"
+                >
+                  Изменить
+                </button>
+              </td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
 
   document
-    .getElementById("search")
-    ?.addEventListener(
-      "input",
-      render
-    );
+  .querySelectorAll(".table-edit")
+  .forEach(button => {
+    button.onclick = () => {
+      const row = rows.find(
+          item =>
+          getId(item) ===
+          button.dataset.id
+      );
+
+      if (row) {
+        openEditor(row);
+      }
+    };
+  });
 }
 
-setupButtons();
-load();
+async function saveRecord(data) {
+  const response = await fetch(
+      `${API_URL}/api/update`,
+        {
+        method: "POST",
+        headers: getHeaders(),
+        body: JSON.stringify(data)
+      }
+  );
+
+  const result =
+  await response.json();
+
+  if (
+    !response.ok ||
+    result.ok === false
+  ) {
+    throw new Error(
+        result.error || "Ошибка сохранения"
+    );
+  }
+
+  return result;
+}
+
+function openEditor(row) {
+  const modal =
+  document.createElement("div");
+
+  modal.className = "modal";
+
+  const selected =
+  getResponsible(row);
+
+  modal.innerHTML = `
+    <div class="modal-window">
+      <div class="modal-header">
+        <h2>
+          Редактирование ${esc(getId(row))}
+        </h2>
+
+        <button id="closeEditor">
+          ×
+        </button>
+      </div>
+
+      <label>
+        Ответственный
+
+        <select id="editResponsible">
+          <option value="">Не назначен</option>
+
+          ${[
+    ...new Set([
+      ...responsibleOptions,
+      selected
+    ])
+  ]
+  .filter(Boolean)
+  .map(name => `
+              <option
+                value="${esc(name)}"
+                ${
+    name === selected
+    ? "selected"
+    : ""
+  }
+              >
+                ${esc(name)}
+              </option>
+            `)
+  .join("")}
+        </select>
+      </label>
+
+      <label>
+        Уровень
+
+        <select id="editLevel">
+          <option value="">Не указан</option>
+          <option value="L1">L1</option>
+          <option value="L2">L2</option>
+          <option value="L3">L3</option>
+        </select>
+      </label>
+
+      <label>
+        Комментарий
+
+        <textarea id="editComment">${esc(
+      getComment(row)
+  )}</textarea>
+      </label>
+
+      <div class="modal-actions">
+        <button id="cancelEditor">
+          Отмена
+        </button>
+
+        <button
+          id="saveEditor"
+          class="primary"
+        >
+          Сохранить
+        </button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+
+  document.getElementById(
+      "closeEditor"
+  ).onclick = () => modal.remove();
+
+  document.getElementById(
+      "cancelEditor"
+  ).onclick = () => modal.remove();
+
+  document.getElementById(
+      "saveEditor"
+  ).onclick = async () => {
+    try {
+      await saveRecord({
+        id: getId(row),
+        kind,
+        status: getStatus(row),
+
+        responsible:
+        document.getElementById(
+            "editResponsible"
+        ).value,
+
+        level:
+        document.getElementById(
+            "editLevel"
+        ).value,
+
+        comment:
+        document.getElementById(
+            "editComment"
+        ).value
+      });
+
+      modal.remove();
+      await loadRows();
+
+    } catch (error) {
+      alert(error.message);
+    }
+  };
+}
+
+ticketsButton.onclick = () => {
+  kind = "ticket";
+  ticketsButton.classList.add("active");
+  ideasButton.classList.remove("active");
+  loadRows();
+};
+
+ideasButton.onclick = () => {
+  kind = "idea";
+  ideasButton.classList.add("active");
+  ticketsButton.classList.remove("active");
+  loadRows();
+};
+
+listButton.onclick = () => {
+  viewMode = "list";
+  listButton.classList.add("active");
+  kanbanButton?.classList.remove("active");
+  render();
+};
+
+kanbanButton.onclick = () => {
+  viewMode = "kanban";
+  kanbanButton.classList.add("active");
+  listButton.classList.remove("active");
+  render();
+};
+
+refreshButton.onclick = loadRows;
+search.oninput = render;
+
+loadRows();
+
+setInterval(loadRows, 20000);
